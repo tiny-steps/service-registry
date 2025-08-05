@@ -50,6 +50,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+
       - name: Set up kubectl
         uses: azure/setup-kubectl@v3
 
@@ -61,5 +62,9 @@ jobs:
 
       - name: Deploy to Kubernetes
         run: |
-          # The kubectl command to update the image of our specific deployment
+          kubectl config set-cluster remote --server=https://tinysteps.ssi.sh:30000 --insecure-skip-tls-verify=true
+          kubectl config set-credentials sish-user --client-key=/dev/null --client-certificate=/dev/null
+          kubectl config set-context remote --cluster=remote --user=sish-user
+          kubectl config use-context remote
+
           kubectl set image deployment/ts-service-registry-deployment ts-service-registry=subhankarm2312/ts-service-registry:${{ needs.build-and-push.outputs.IMAGE_TAG }}
