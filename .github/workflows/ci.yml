@@ -37,7 +37,7 @@ jobs:
       - name: Build and push image with Jib
         run: |
           # Construct the full image name: tinysteps/ts-user-service:abc1234-20250805142000
-          IMAGE_NAME="tinysteps/${{ github.event.repository.name }}"
+          IMAGE_NAME="subhankarm2312/${{ github.event.repository.name }}"
           IMAGE_TAG="${{ steps.generate_tag.outputs.tag }}"
           
           # Pass the full image name and tag to Maven using the -Dimage property
