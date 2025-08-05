@@ -42,3 +42,24 @@ jobs:
           
           # Pass the full image name and tag to Maven using the -Dimage property
           mvn compile com.google.cloud.tools:jib-maven-plugin:build -Dimage="${IMAGE_NAME}:${IMAGE_TAG}"
+
+  deploy:
+    needs: build-and-push # This ensures the deploy job only runs after build-and-push is successful
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up kubectl
+        uses: azure/setup-kubectl@v3
+
+      - name: Configure Kubernetes cluster connection
+        uses: azure/k8s-set-context@v3
+        with:
+          method: kubeconfig
+          kubeconfig: ${{ secrets.KUBECONFIG }} # The magic credential!
+
+      - name: Deploy to Kubernetes
+        run: |
+          # The kubectl command to update the image of our specific deployment
+          kubectl set image deployment/ts-service-registry-deployment ts-service-registry=subhankarm2312/ts-service-registry:${{ needs.build-and-push.outputs.IMAGE_TAG }}

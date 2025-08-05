@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: ts-service-registry
+spec:
+  type: ClusterIP
+  selector:
+    app: ts-service-registry
+  ports:
+    - protocol: TCP
+      port: 8761 # The port other services will use to connect
+      targetPort: 8761 # The port the container is listening on
