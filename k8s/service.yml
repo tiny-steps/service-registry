@@ -3,7 +3,7 @@ kind: Service
 metadata:
   name: ts-service-registry
 spec:
-  type: ClusterIP
+  type: LoadBalancer
   selector:
     app: ts-service-registry
   ports:
