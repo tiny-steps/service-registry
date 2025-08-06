@@ -1,4 +1,4 @@
-name: Build and Push Docker Image
+name: Build and Deploy to Kubernetes
 
 on:
   push:
@@ -8,63 +8,93 @@ on:
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
+    outputs:
+      IMAGE_TAG: ${{ steps.generate_tag.outputs.tag }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-
       - name: Set up JDK 21
         uses: actions/setup-java@v4
         with:
           java-version: '21'
           distribution: 'temurin'
           cache: 'maven'
-
       - name: Login to Docker Hub
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-      # This new step generates the dynamic tag
       - name: Generate image tag
         id: generate_tag
         run: |
           TIMESTAMP=$(date +'%Y%m%d%H%M%S')
           SHORT_SHA=$(echo $GITHUB_SHA | cut -c1-7)
           echo "tag=${SHORT_SHA}-${TIMESTAMP}" >> $GITHUB_OUTPUT
-
-      # This step is modified to use the generated tag
       - name: Build and push image with Jib
         run: |
-          # Construct the full image name: tinysteps/ts-user-service:abc1234-20250805142000
           IMAGE_NAME="subhankarm2312/ts-service-registry"
           IMAGE_TAG="${{ steps.generate_tag.outputs.tag }}"
-          
-          # Pass the full image name and tag to Maven using the -Dimage property
           mvn compile com.google.cloud.tools:jib-maven-plugin:build -Dimage="${IMAGE_NAME}:${IMAGE_TAG}"
 
   deploy:
-    needs: build-and-push # This ensures the deploy job only runs after build-and-push is successful
+    needs: build-and-push
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-
-      - name: Set up kubectl
-        uses: azure/setup-kubectl@v3
-
-      - name: Configure Kubernetes cluster connection
-        uses: azure/k8s-set-context@v3
+      # Step A: Setup SSH for the runner
+      - name: Set up SSH agent for tunnel
+        uses: webfactory/ssh-agent@v0.8.0
         with:
-          method: kubeconfig
-          kubeconfig: ${{ secrets.KUBECONFIG }} # The magic credential!
+          ssh-private-key: ${{ secrets.SISH_PRIVATE_KEY }}
 
-      - name: Deploy to Kubernetes
+      # Step B: Establish the Sish tunnel and run it in the background
+      - name: Establish Sish Tunnel to Local K8s
         run: |
-          kubectl config set-cluster remote --server=https://tinysteps.ssi.sh:30000 --insecure-skip-tls-verify=true
-          kubectl config set-credentials sish-user --client-key=/dev/null --client-certificate=/dev/null
-          kubectl config set-context remote --cluster=remote --user=sish-user
-          kubectl config use-context remote
+          # The ssh command is run in the background. The sleep command is crucial.
+          ssh -o StrictHostKeyChecking=no -o ExitOnForwardFailure=yes -N -R tinysteps:30000:localhost:6443 \
+              -p 2222 sish@${{ secrets.SISH_HOST }} &
+          sleep 5  # Give the tunnel a moment to establish
 
-          kubectl set image deployment/ts-service-registry-deployment ts-service-registry=subhankarm2312/ts-service-registry:${{ needs.build-and-push.outputs.IMAGE_TAG }}
+      # Step C: Generate a kubeconfig file that points to the tunnel
+      - name: Configure kubectl
+        run: |
+          # Use the public IP of the Sish server to connect to the tunnel's remote end.
+          mkdir -p ~/.kube
+          cat > ~/.kube/config <<EOF
+          apiVersion: v1
+          clusters:
+          - cluster:
+              insecure-skip-tls-verify: true
+              server: https://${{ secrets.SISH_HOST }}:30000
+            name: sish-tunnel-cluster
+          contexts:
+          - context:
+              cluster: sish-tunnel-cluster
+              user: sish-user
+            name: sish-tunnel-context
+          current-context: sish-tunnel-context
+          kind: Config
+          preferences: {}
+          users:
+          - name: sish-user
+            user:
+              user:
+                client-certificate-data: LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSURRakNDQWlxZ0F3SUJBZ0lJRzV5VGNSMUJBSmN3RFFZSktvWklodmNOQVFFTEJRQXdGVEVUTUJFR0ExVUUKQXhNS2EzVmlaWEp1WlhSbGN6QWVGdzB5TlRBNE1EVXhNalU1TXpkYUZ3MHlOakE0TURVeE1qVTVNemRhTURZeApGekFWQmdOVkJBb1REbk41YzNSbGJUcHRZWE4wWlhKek1Sc3dHUVlEVlFRREV4SmtiMk5yWlhJdFptOXlMV1JsCmMydDBiM0F3Z2dFaU1BMEdDU3FHU0liM0RRRUJBUVVBQTRJQkR3QXdnZ0VLQW9JQkFRQ3NaNTNld0hIMWJqY1MKbi9hZXFoZTZQYXhEYklNOFJqSy9mVG8wVjhEMUkvS3ZQejlVaFhJdlAxVHk5bjF0d2Nldmx4VWsxVUhGZG54YgpBd2gvL1d6V1U1bmxMb1NFeVhEeE5RMnR6QXZXL2ROcHlvOFIyaGNnRzkxZndhbHNBcUZkQURBWi9vZHFsOGRXCk0yTk9SZDBVMUFHZEtBZDVSYzNYL3c5MkU0dzJUYXRIdk9WK1lOQmh6R04rTnVwc0RYSWNDaXd1QS9LNDlkQ3MKSThBbmx4d3FXUEJKMkg3UnIzZUt4YVJ2akkyMXBCUVNtUzI5RWRvVE9QcEg4UkswbVBlL0VxdEhjcVR3ODdzVwpaSkxVdzF2NDh5d01TNFEvaHM4Z3Ftc3V1NUwwMmlmdGJFejMzQWhXc1EwWGdhSFVuNGRJNFRreGw3ZElNVVRtCkJDdVFOd3liQWdNQkFBR2pkVEJ6TUE0R0ExVWREd0VCL3dRRUF3SUZvREFUQmdOVkhTVUVEREFLQmdnckJnRUYKQlFjREFqQU1CZ05WSFJNQkFmOEVBakFBTUI4R0ExVWRJd1FZTUJhQUZIZnVKUmc2R3N0WmZUZWRzcWdSdTR5UwpYM3RTTUIwR0ExVWRFUVFXTUJTQ0VtUnZZMnRsY2kxbWIzSXRaR1Z6YTNSdmNEQU5CZ2txaGtpRzl3MEJBUXNGCkFBT0NBUUVBVXB4b0c1RFFlcUYzM3ZkdmREemUxemtGS0kvQlp2N0V3ZG16MTg1YVk5S3loV1dtS0xHOEExeGcKWjJjZ0hzUjhKU1FGK1M4STBweTFrd3pRUmxWNmZNaWNLS0o0UnhUN2lTejMwTlpXWGo5dnoySlZYOU0vUXE3egpiTkUvOG1iQ0FWSVNmaHQ0OUxUSHJUS1RJOE9Id2xMUWJKdjh1UE1paEhZWWlEd3E1VWxaT0JPMmFScjI3ZjFQCnJUY0JRU0Z1aE1ySXMwbGRLQVVZaHVWczVBUm1UV0dUZzlic3E0eWsvZzVjRFFubXBnalozTmhIeFA2V1A5aEQKcUhwTkU2RnBXelNXSnNsWHJ5aVFrYWwvUEJQelZIZG5nZU1iT0FuMFR0UnE1c0tTV29tKzdJQzdCdzVqcS8yVApBb25vcWMzY1ZQUEdDMGdReTAxMHRvMHlaWnJQRWc9PQotLS0tLUVORCBDRVJUSUZJQ0FURS0tLS0tCg==
+                client-key-data: LS0tLS1CRUdJTiBSU0EgUFJJVkFURSBLRVktLS0tLQpNSUlFb3dJQkFBS0NBUUVBckdlZDNzQng5VzQzRXAvMm5xb1h1ajJzUTJ5RFBFWXl2MzA2TkZmQTlTUHlyejgvClZJVnlMejlVOHZaOWJjSEhyNWNWSk5WQnhYWjhXd01JZi8xczFsT1o1UzZFaE1sdzhUVU5yY3dMMXYzVGFjcVAKRWRvWElCdmRYOEdwYkFLaFhRQXdHZjZIYXBmSFZqTmpUa1hkRk5RQm5TZ0hlVVhOMS84UGRoT01OazJyUjd6bApmbURRWWN4amZqYnFiQTF5SEFvc0xnUHl1UFhRckNQQUo1Y2NLbGp3U2RoKzBhOTNpc1drYjR5TnRhUVVFcGt0CnZSSGFFemo2Ui9FU3RKajN2eEtyUjNLazhQTzdGbVNTMU1OYitQTXNERXVFUDRiUElLcHJMcnVTOU5vbjdXeE0KOTl3SVZyRU5GNEdoMUorSFNPRTVNWmUzU0RGRTVnUXJrRGNNbXdJREFRQUJBb0lCQVFDR0lFNlh2NHhvN29mMQorM0Q0VzBmK1lvQ2tLOFdsbk05YVhtaHIxR0dQMVptMmNUUXA0Mi9FQmpkbWxoRmExRWt2K0JCQkNaQVR1V3hoCnVlaGcrcDR6MS9LQWRFSXd0QzhqMkt4OXE2TUNiWktPV1VJWkYxeXFaRU5EZmZ6NnhNa1krMDV3eXE0N1pUMTEKZUtFbmdmN1BkMmlTQlZSYktzMUwzMmo5NlpOSm9yZ0ZDQVVSdmw0WElXTGIzZ29KZksxaGU3eGRGdFYxbHVBSApsbmFZeFVJdWRlNkZrRlVVSm5GQmxzWmNyaVc0QkZsYzBsTUUvUjZxN2JUK1VRZE5zc2t6VDQxRDV1VUtLUCtiCmNkMzQzTGRzWnppNkZMNVB1MFlXNHV0dVNEaEZJdDdsRGNEWW5keEN6WTUxRjFoQ2VzM2cxZkpGbUc2ak5JL2EKUjZiWko0Y2hBb0dCQU52M3hPYjdRTTRQTGJ4L1Q3Y3lhVk8rQkVPeXB6UndadVhTMThHc0xodFBnZnMrNG5tdgpINXBTcndETlBmeVVyNzNWUzJKa2JydmdRNVlKK2FXbnpTQlVQdUtaREJVKzhkbFAvRWZLMkVBRlFMWWNXc2FICmZ2bEQ3NG8wdjdhS2JXOWNHdC9OZWRWa21mSFdoN3VkYkFkR0w5VTRQNU5UUU15U2t2djhKVklwQW9HQkFNaWwKVUxSWDZEOHdqTW1uZ05wUTMrZDNqZUNRamd2dmxiQUZSemtrSGJRdmtDKzluUXVDWFdMWTgxeXJqWkY0SmdjVgpNQklsUlpRbTNidXExMm9BN1JzanpvSk13RzZtNXBiS0ZkeUxFeVVsRDJuZXpTa1FydWVUVVcrL1NrNWRmclM3ClpBTytPbDQrU2lkTkNaNUVDaDJDdUFyMFI1Ui92bFhPdGJkMldta2pBb0dBQnhhMUFieVhHZ3pqTEcvdDRibCsKSzNTMExucFRhUjAyTTdIWHdpWUtWbGI1bVY4dGJUNTNoa0dqNGlLN0hLaXVBVEFlZmMwK3hFODEzbC96NjZLOAp1WTM5ZU0vMTA3bHprYzFDRkE0MWFkckJleHp1ei9jTjRIcVAvYVExaVd4c21tb2RjNWpybERUcHdTRm92bU1VCldDZXE0dlF0R0ZKV2hFRTArMm5reWdFQ2dZQWlVU3dKZkZPTG96a2hNRlg0Z1FhYXB6Y0w1bzEwK3loRjc5RXIKczhLazA5RzhhSmpZcEJabTFxWmcvako3WStwVkljbVVBTzN5bGVjc3R0NmJFY2Q3OGRiYk1GZGxWWVJ3MitWNwpVQW9aTzBwMG1CZk00ejZXK3ZwZHU0RHhBRXF3akxCaGQ0S3lKY00zRDVVS2phYVJQNDlNeUZVSjBBTjAxNkw2CjJ2SkJzd0tCZ0VzN1ZaNTQ2bjZiTnZrTFRMTkltR0JmcEZYRm9JUmtyTmRkSkErWDZrQldrRUUyNUtrT3ViOFgKSWFkVkQwZzhnTXBUMkU3d21OMWR4aWZkS1ZiZ2F3WTVIM1BmR0pSRmd0ZE84VHEzbW1LeUlTbWUyWnhHZXV3TgpYNGJlZmpydXNpbUU0Qll1Tmc0cDR4ci92OTVzZXVZSlUyZGk2RkprdDRCSVZUOWJmbnBOCi0tLS0tRU5EIFJTQSBQUklWQVRFIEtFWS0tLS0tCg==
+          EOF
+
+      # Step D: Deploy to Kubernetes using the new kubeconfig
+      - name: Deploy to Kubernetes
+        env:
+          KUBECONFIG: ~/.kube/config
+        run: |
+          # Verify connection to the cluster via the tunnel
+          kubectl get nodes
+          
+          # Deploy your application using the image tag from the build job
+          IMAGE_TAG="${{ needs.build-and-push.outputs.IMAGE_TAG }}"
+          
+          # Use your kubectl command to update the deployment
+          kubectl set image deployment/ts-service-registry-deployment ts-service-registry=subhankarm2312/ts-service-registry:$IMAGE_TAG
