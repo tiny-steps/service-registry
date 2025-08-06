@@ -15,6 +15,6 @@ spec:
       containers:
         - name: ts-service-registry
           # This will be your image from Docker Hub
-          image: subhankarm2312/ts-service-registry:a3a8b97-20250805101628
+          image: subhankarm2312/ts-service-registry:76381cf-20250806135926
           ports:
             - containerPort: 8761 # Default Eureka port
