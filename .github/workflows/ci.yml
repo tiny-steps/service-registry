@@ -52,15 +52,13 @@ jobs:
       # Step B: Establish the Sish tunnel and run it in the background
       - name: Establish Sish Tunnel to Local K8s
         run: |
-          # The ssh command is run in the background. The sleep command is crucial.
           ssh -o StrictHostKeyChecking=no -o ExitOnForwardFailure=yes -N -R tinysteps:30000:localhost:6443 \
               -p 2222 sish@${{ secrets.SISH_HOST }} &
-          sleep 5  # Give the tunnel a moment to establish
+          sleep 5
 
       # Step C: Generate a kubeconfig file that points to the tunnel
       - name: Configure kubectl
         run: |
-          # Use the public IP of the Sish server to connect to the tunnel's remote end.
           mkdir -p ~/.kube
           cat > ~/.kube/config <<EOF
           apiVersion: v1
@@ -72,28 +70,25 @@ jobs:
           contexts:
           - context:
               cluster: sish-tunnel-cluster
-              user: sish-user
+              user: github-actions-user
             name: sish-tunnel-context
           current-context: sish-tunnel-context
           kind: Config
           preferences: {}
           users:
-          - name: sish-user
+          - name: github-actions-user
             user:
-              # Get your token from your local cluster and store it as a secret
               token: "${{ secrets.K8S_SERVICE_ACCOUNT_TOKEN }}"
           EOF
 
       # Step D: Deploy to Kubernetes using the new kubeconfig
       - name: Deploy to Kubernetes
+        # THIS IS THE CRUCIAL PART
         env:
           KUBECONFIG: ~/.kube/config
         run: |
-          # Verify connection to the cluster via the tunnel
+          # The KUBECONFIG variable tells kubectl where to find the config file.
           kubectl get nodes
           
-          # Deploy your application using the image tag from the build job
           IMAGE_TAG="${{ needs.build-and-push.outputs.IMAGE_TAG }}"
-          
-          # Use your kubectl command to update the deployment
           kubectl set image deployment/ts-service-registry-deployment ts-service-registry=subhankarm2312/ts-service-registry:$IMAGE_TAG
