@@ -1,5 +1,6 @@
-name: Build, Push, and Deploy to K3s
-
+name: Build and Push Docker Image
+env:
+  SERVICE_NAME: ts-service-registry
 on:
   push:
     branches:
@@ -8,8 +9,6 @@ on:
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
-    outputs:
-      IMAGE_TAG: ${{ steps.generate_tag.outputs.tag }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -27,6 +26,7 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
+      # This new step generates the dynamic tag
       - name: Generate image tag
         id: generate_tag
         run: |
@@ -34,12 +34,14 @@ jobs:
           SHORT_SHA=$(echo $GITHUB_SHA | cut -c1-7)
           echo "tag=${SHORT_SHA}-${TIMESTAMP}" >> $GITHUB_OUTPUT
 
+      # This step is modified to use the generated tag
       - name: Build and push image with Jib
         run: |
-          IMAGE_NAME="subhankarm2312/ts-service-registry"
+          IMAGE_NAME="${{ secrets.DOCKERHUB_USERNAME }}/${{env.SERVICE_NAME}}"
           IMAGE_TAG="${{ steps.generate_tag.outputs.tag }}"
+          
+          # Pass the full image name and tag to Maven using the -Dimage property
           mvn compile com.google.cloud.tools:jib-maven-plugin:build -Dimage="${IMAGE_NAME}:${IMAGE_TAG}"
-
   deploy:
     needs: build-and-push
     runs-on: ubuntu-latest
@@ -55,5 +57,4 @@ jobs:
 
       - name: Deploy to Kubernetes
         run: |
-          # This command updates the 'ts-service-registry' container within the 'ts-service-registry-deployment'
-          kubectl set image deployment/ts-service-registry-deployment ts-service-registry=subhankarm2312/ts-service-registry:${{ needs.build-and-push.outputs.IMAGE_TAG }}
+          kubectl set image deployment/${{env.SERVICE_NAME}}-deployment ${{env.SERVICE_NAME}}=${{ secrets.DOCKERHUB_USERNAME }}/${{env.SERVICE_NAME}}:${{ needs.build-and-push.outputs.IMAGE_TAG }}
