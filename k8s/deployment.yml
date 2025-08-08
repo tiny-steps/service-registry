@@ -15,7 +15,7 @@ spec:
       containers:
         - name: ts-service-registry
           # This will be your image from Docker Hub
-          image: subhankarm2312/ts-service-registry:76381cf-20250806135926
+          image: subhankarm2312/ts-service-registry:12b9a0b-20250808063304
           env:
             - name: JAVA_TOOL_OPTIONS
               value: "-Xms128m -Xmx256m"
