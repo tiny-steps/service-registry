@@ -1,6 +1,7 @@
 name: Build and Push Docker Image
 env:
   SERVICE_NAME: ts-service-registry
+
 on:
   push:
     branches:
@@ -9,6 +10,8 @@ on:
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
+    outputs:
+      IMAGE_TAG: ${{ steps.generate_tag.outputs.tag }} # <-- Export tag to deploy job
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -26,7 +29,6 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      # This new step generates the dynamic tag
       - name: Generate image tag
         id: generate_tag
         run: |
@@ -34,14 +36,13 @@ jobs:
           SHORT_SHA=$(echo $GITHUB_SHA | cut -c1-7)
           echo "tag=${SHORT_SHA}-${TIMESTAMP}" >> $GITHUB_OUTPUT
 
-      # This step is modified to use the generated tag
       - name: Build and push image with Jib
         run: |
-          IMAGE_NAME="${{ secrets.DOCKERHUB_USERNAME }}/${{env.SERVICE_NAME}}"
+          IMAGE_NAME="${{ secrets.DOCKERHUB_USERNAME }}/${{ env.SERVICE_NAME }}"
           IMAGE_TAG="${{ steps.generate_tag.outputs.tag }}"
-          
-          # Pass the full image name and tag to Maven using the -Dimage property
-          mvn compile com.google.cloud.tools:jib-maven-plugin:build -Dimage="${IMAGE_NAME}:${IMAGE_TAG}"
+          mvn compile com.google.cloud.tools:jib-maven-plugin:build \
+            -Dimage="${IMAGE_NAME}:${IMAGE_TAG}"
+
   deploy:
     needs: build-and-push
     runs-on: ubuntu-latest
@@ -55,6 +56,17 @@ jobs:
           method: kubeconfig
           kubeconfig: ${{ secrets.KUBECONFIG }}
 
+      - name: Ensure deployment exists
+        run: |
+          if ! kubectl get deployment ${{ env.SERVICE_NAME }}-deployment >/dev/null 2>&1; then
+            echo "Deployment not found. Creating it..."
+            kubectl apply -f k8s/deployment.yaml
+          else
+            echo "Deployment exists. Skipping creation."
+          fi
+
       - name: Deploy to Kubernetes
         run: |
-          kubectl set image deployment/${{env.SERVICE_NAME}}-deployment ${{env.SERVICE_NAME}}=${{ secrets.DOCKERHUB_USERNAME }}/${{env.SERVICE_NAME}}:${{ needs.build-and-push.outputs.IMAGE_TAG }}
+          kubectl set image deployment/${{ env.SERVICE_NAME }}-deployment \
+            ${{ env.SERVICE_NAME }}=${{ secrets.DOCKERHUB_USERNAME }}/${{ env.SERVICE_NAME }}:${{ needs.build-and-push.outputs.IMAGE_TAG }}
+          kubectl rollout status deployment/${{ env.SERVICE_NAME }}-deployment
