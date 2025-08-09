@@ -58,7 +58,7 @@ jobs:
 
       - name: Ensure deployment exists
         run: |
-          if ! kubectl get deployment ${{ env.SERVICE_NAME }}-deployment >/dev/null 2>&1; then
+          if ! kubectl get deployment deployment >/dev/null 2>&1; then
             echo "Deployment not found. Creating it..."
             kubectl apply -f k8s/deployment.yaml
           else
