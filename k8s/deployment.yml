@@ -2,8 +2,10 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: ts-service-registry-deployment
+  labels:
+    app: ts-service-registry
 spec:
-  replicas: 1 # For a registry, 1 is usually enough for a dev environment
+  replicas: 1
   selector:
     matchLabels:
       app: ts-service-registry
@@ -14,17 +16,16 @@ spec:
     spec:
       containers:
         - name: ts-service-registry
-          # This will be your image from Docker Hub
-          image: subhankarm2312/ts-service-registry:12b9a0b-20250808063304
+          image: subhankarm2312/ts-service-registry # CORRECTED: Placeholder name now matches ci.yml
           env:
             - name: JAVA_TOOL_OPTIONS
               value: "-Xms128m -Xmx256m"
           resources:
             requests:
-              memory: "128Mi" # Request 256 MiB of memory
-              cpu: "100m"        # Request 0.25 of a CPU core
+              memory: "128Mi"
+              cpu: "100m"
             limits:
-              memory: "512Mi" # Limit the pod to a max of 512 MiB
-              cpu: "500m"      # Limit the pod to a max of 0.5 of a CPU core
+              memory: "512Mi"
+              cpu: "500m"
           ports:
-            - containerPort: 8761 # Default Eureka port
+            - containerPort: 8092
