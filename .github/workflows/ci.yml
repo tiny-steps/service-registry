@@ -1,4 +1,4 @@
-name: Build, Push, and Deploy notification Service
+name: Build, Push, and Deploy Service Registry
 env:
   SERVICE_NAME: ts-service-registry
   DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
